@@ -17,9 +17,9 @@ func main() {
 
 	for {
 		destroyedClientId := <-domain.ClientDestroyedChan
+		utils.SleepBetween(config.CLIENT_BETWEEN_TIME_MIN, config.CLIENT_BETWEEN_TIME_MAX)
 		utils.Log.Info("Client destroyed", zap.Int("clientId", destroyedClientId))
 
-		utils.SleepBetween(config.CLIENT_BETWEEN_TIME_MIN, config.CLIENT_BETWEEN_TIME_MAX)
 		domain.NewClient()
 	}
 }
