@@ -1,6 +1,9 @@
 package main
 
 import (
+	"math/rand"
+	"time"
+
 	"github.com/darkcat013/pr-client/config"
 	"github.com/darkcat013/pr-client/domain"
 	"github.com/darkcat013/pr-client/utils"
@@ -9,6 +12,7 @@ import (
 
 func main() {
 	utils.InitializeLogger()
+	rand.Seed(time.Now().UnixNano())
 
 	for i := 0; i < config.MAX_CLIENTS; i++ {
 		domain.NewClient()

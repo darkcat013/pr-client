@@ -1,16 +1,15 @@
 package domain
 
 type Menu struct {
-	Restaurants     int              `json:"restaurants"`
-	RestaurantsData []RestaurantData `json:"restaurants_data"`
+	Restaurants     int                    `json:"restaurants"`
+	RestaurantsData map[int]RestaurantData `json:"restaurants_data"`
 }
 
 type RestaurantData struct {
-	RestaurantId int     `json:"restaurant_id"`
-	Name         string  `json:"name"`
-	MenuItems    int     `json:"menu_items"`
-	Menu         []Food  `json:"menu"`
-	Rating       float64 `json:"rating"`
+	Name      string  `json:"name"`
+	MenuItems int     `json:"menu_items"`
+	Menu      []Food  `json:"menu"`
+	Rating    float64 `json:"rating"`
 }
 
 type Food struct {
