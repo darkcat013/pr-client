@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"math/rand"
 	"net/http"
+	"sort"
+	"strconv"
 	"sync/atomic"
 
 	"github.com/darkcat013/pr-client/config"
@@ -42,9 +44,9 @@ func (c *Client) StartClient() {
 		Orders:   make([]OrderPayload, 0),
 	}
 
-	for i := 0; i < menu.Restaurants; i++ {
+	for i := 1; i <= menu.Restaurants; i++ {
 		if rand.Intn(2) > 0 {
-			order := c.newRestaurantOrder(menu.RestaurantsData[i].Menu, menu.RestaurantsData[i].RestaurantId)
+			order := c.newRestaurantOrder(menu.RestaurantsData[i].Menu, i)
 			foodOrderPayload.Orders = append(foodOrderPayload.Orders, order)
 		}
 	}
@@ -57,22 +59,85 @@ func (c *Client) StartClient() {
 
 	utils.Log.Info("Received response from food ordering service", zap.Int("clientId", c.Id), zap.Any("orderResponse", response))
 
-	// sort.Slice(response.Orders, func(i, j int) bool {
-	// 	return response.Orders[i].EstimatedWaitingTime < response.Orders[j].EstimatedWaitingTime
-	// })
+	sort.Slice(response.Orders, func(i, j int) bool {
+		return response.Orders[i].EstimatedWaitingTime < response.Orders[j].EstimatedWaitingTime
+	})
 
-	// for i := 0; i < len(response.Orders); i++ {
-	// 	currentWaitTime := response.Orders[i].EstimatedWaitingTime
-	// 	utils.Log.Info("Waiting for estimated time", zap.Int("clientId", c.Id), zap.Float64("estimated_wait_time", currentWaitTime), zap.Int("restaurantId", response.Orders[i].RestaurantId))
-	// 	utils.SleepFor(currentWaitTime)
+	ratingPayload := FoodOrderRating{
+		ClientId: c.Id,
+		OrderId:  response.OrderId,
+		Orders:   make([]OrderRating, 0),
+	}
 
-	// 	utils.Log.Info("Go pickup order", zap.Int("clientId", c.Id), zap.Int("restaurantId", response.Orders[i].RestaurantId))
+	ordersToRevisit := make([]int, 0)
 
-	// 	utils.SleepBetween(config.CLIENT_ON_ROAD_TIME_MIN, config.CLIENT_ON_ROAD_TIME_MAX)
-	// 	c.PickupOrder(response.Orders[i].RestaurantAddress)
+	totalWaitTime := 0.0
+	for i := 0; i < len(response.Orders); i++ {
+		currentWaitTime := 0.0
 
-	// 	utils.Log.Info("Order picked up", zap.Int("clientId", c.Id), zap.Int("restaurantId", response.Orders[i].RestaurantId))
-	// }
+		if response.Orders[i].EstimatedWaitingTime > totalWaitTime {
+			currentWaitTime = response.Orders[i].EstimatedWaitingTime - totalWaitTime
+		}
+		utils.Log.Info("Waiting for estimated time", zap.Int("clientId", c.Id), zap.Float64("estimated_wait_time", currentWaitTime), zap.Int("restaurantId", response.Orders[i].RestaurantId))
+		utils.SleepFor(currentWaitTime)
+
+		utils.Log.Info("Go pickup order", zap.Int("clientId", c.Id), zap.Int("restaurantId", response.Orders[i].RestaurantId))
+
+		order := c.PickupOrder(response.Orders[i].RestaurantAddress, strconv.Itoa(response.Orders[i].OrderId))
+
+		totalWaitTime += currentWaitTime
+
+		if order.IsReady {
+			orderRating := OrderRating{
+				RestaurantId:         response.Orders[i].RestaurantId,
+				OrderId:              response.Orders[i].OrderId,
+				Rating:               getRating(response.Orders[i].EstimatedWaitingTime, totalWaitTime),
+				EstimatedWaitingTime: response.Orders[i].EstimatedWaitingTime,
+				WaitingTime:          totalWaitTime,
+			}
+			ratingPayload.Orders = append(ratingPayload.Orders, orderRating)
+		} else {
+			ordersToRevisit = append(ordersToRevisit, i)
+		}
+	}
+
+	secondTotalWaitTime := 0.0
+	for len(ordersToRevisit) > 0 {
+		newOrdersToRevisit := make([]int, 0)
+		for i := 0; i < len(ordersToRevisit); i++ {
+			currentWaitTime := 5.0
+			orderToRevisit := response.Orders[ordersToRevisit[i]]
+			if orderToRevisit.EstimatedWaitingTime > secondTotalWaitTime {
+				currentWaitTime = orderToRevisit.EstimatedWaitingTime - secondTotalWaitTime
+			}
+			utils.Log.Info("Waiting for estimated time, AGAIN", zap.Int("clientId", c.Id), zap.Float64("estimated_wait_time", currentWaitTime), zap.Int("restaurantId", orderToRevisit.RestaurantId))
+			utils.SleepFor(currentWaitTime)
+
+			utils.Log.Info("Go pickup order, AGAIN", zap.Int("clientId", c.Id), zap.Int("restaurantId", orderToRevisit.RestaurantId))
+
+			order := c.PickupOrder(orderToRevisit.RestaurantAddress, strconv.Itoa(orderToRevisit.OrderId))
+
+			if order.IsReady {
+				orderRating := OrderRating{
+					RestaurantId:         orderToRevisit.RestaurantId,
+					OrderId:              orderToRevisit.OrderId,
+					Rating:               getRating(response.Orders[i].EstimatedWaitingTime, totalWaitTime+currentWaitTime),
+					EstimatedWaitingTime: orderToRevisit.EstimatedWaitingTime,
+					WaitingTime:          totalWaitTime + currentWaitTime,
+				}
+				ratingPayload.Orders = append(ratingPayload.Orders, orderRating)
+			} else {
+				newOrdersToRevisit = append(newOrdersToRevisit, ordersToRevisit[i])
+			}
+			secondTotalWaitTime += currentWaitTime
+		}
+		ordersToRevisit = newOrdersToRevisit
+	}
+
+	totalWaitTime += secondTotalWaitTime
+	utils.Log.Info("Finished picking up orders", zap.Int("clientId", c.Id), zap.Float64("totalWaitTime", totalWaitTime), zap.Any("ratingPayload", ratingPayload))
+
+	c.SendRating(ratingPayload)
 
 	ClientDestroyedChan <- c.Id
 }
@@ -144,9 +209,54 @@ func (c *Client) sendOrder(order FoodOrderPayload) FoodOrderResponse {
 		utils.Log.Fatal("Failed to decode FoodOrderResponse", zap.String("error", err.Error()), zap.Int("clientId", c.Id))
 	}
 
+	utils.Log.Info("Decoded FoodOrderResponse", zap.Int("statusCode", resp.StatusCode), zap.Any("response", result))
+
 	return result
 }
 
-// func (c *Client) PickupOrder(address string) DiningHallOrder {
+func (c *Client) PickupOrder(address string, id string) DiningHallOrder {
+	resp, err := http.Get(address + "/v2/order/" + id)
+	if err != nil {
+		utils.Log.Fatal("Failed to get order from restaurant "+address, zap.String("error", err.Error()), zap.Any("orderId", id))
+	}
 
-// }
+	var result DiningHallOrder
+	err = json.NewDecoder(resp.Body).Decode(&result)
+
+	if err != nil {
+		utils.Log.Fatal("Failed to decode Dining hall order", zap.String("error", err.Error()), zap.Int("clientId", c.Id))
+	}
+
+	utils.Log.Info("Decoded Dining hall order", zap.Int("statusCode", resp.StatusCode), zap.Any("response", result))
+
+	return result
+}
+
+func (c *Client) SendRating(payload FoodOrderRating) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		utils.Log.Fatal("Failed to convert order to JSON ", zap.String("error", err.Error()), zap.Any("ratingPayload", payload))
+	}
+
+	resp, err := http.Post(config.FOOD_ORDERING_SERVICE_URL+"/rating", "application/json", bytes.NewBuffer(body))
+	if err != nil {
+		utils.Log.Fatal("Failed to get response from food ordering rating ", zap.String("error", err.Error()))
+	}
+
+	utils.Log.Info("Response from food ordering RATING", zap.Int("statusCode", resp.StatusCode))
+}
+
+func getRating(estimated, actual float64) int {
+	if estimated < actual {
+		return 5
+	} else if estimated < actual*1.1 {
+		return 4
+	} else if estimated < actual*1.2 {
+		return 3
+	} else if estimated < actual*1.3 {
+		return 2
+	} else if estimated < actual*1.4 {
+		return 1
+	}
+	return 0
+}

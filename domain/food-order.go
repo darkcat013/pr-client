@@ -26,3 +26,17 @@ type OrderResponse struct {
 	CreatedTime          float64 `json:"created_time"`
 	RegisteredTime       float64 `json:"registered_time"`
 }
+
+type OrderRating struct {
+	RestaurantId         int     `json:"restaurant_id"`
+	OrderId              int     `json:"order_id"`
+	Rating               int     `json:"rating"`
+	EstimatedWaitingTime float64 `json:"estimated_waiting_time"`
+	WaitingTime          float64 `json:"waiting_time"`
+}
+
+type FoodOrderRating struct {
+	ClientId int           `json:"client_id"`
+	OrderId  int           `json:"order_id"`
+	Orders   []OrderRating `json:"orders"`
+}
